@@ -1,0 +1,7 @@
+python: /zfssz4/B2C_RD_P2/PMO/fangzhonghai/software/anaconda3/envs/python37/bin/python
+spliceai: /zfssz4/B2C_RD_P2/PMO/fangzhonghai/software/anaconda3/envs/spliceai/bin/spliceai
+reference: /hwfssz1/ST_MCHRI/CLINIC/SOFTWARES/analysis_pipeline/HPC_chip/db/aln_db/hg19/hg19_chM_male_mask.fa
+vcf_header: /zfssz4/B2C_RD_P2/PMO/fangzhonghai/py_scripts/vcf_head.txt
+skip_vcf_header_row: 28
+process: 3
+resource: -l vf=3G,p=3 -binding linear:3
