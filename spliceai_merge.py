@@ -58,6 +58,45 @@ def interpretation(spliceai_list, chrom, pos):
         return '.'
 
 
+def judge_stream(difference, strand):
+    if strand == '-':
+        if difference >= 0:
+            return 'upstream'
+        else:
+            return 'downstream'
+    else:
+        if difference >= 0:
+            return 'downstream'
+        else:
+            return 'upstream'
+
+
+def biology(spliceai_list, annotation):
+    comment = '.'
+    threshold = 0.2
+    gene = spliceai_list[1]
+    strand = annotation.loc[annotation['#NAME'] == gene, 'STRAND'].values[0]
+    ds = spliceai_list[2:6]
+    dp = spliceai_list[6:10]
+    ds = [float(i) for i in ds]
+    dp = [int(i) for i in dp]
+    ds_tuple = [(i, x) for i, x in enumerate(ds)]
+    ds_tuple.sort(key=lambda x: x[1], reverse=True)
+    ds_index = [ds_tuple[0][0], ds_tuple[1][0]]
+    if ds_tuple[0][1] >= threshold and ds_tuple[1][1] >= threshold:
+        if {0, 1}.issubset(set(ds_index)):
+            comment = "Alternative 3' ss usage. Use of a cryptic site {} nt {} from 3' ss".format(abs(dp[0]-dp[1]), judge_stream(dp[0]-dp[1], strand))
+        elif {2, 3}.issubset(set(ds_index)):
+            comment = "Alternative 5' ss usage. Use of a cryptic site {} nt {} from 5' ss".format(abs(dp[2]-dp[3]), judge_stream(dp[2]-dp[3], strand))
+        elif {1, 3}.issubset(set(ds_index)):
+            comment = 'Exon skipped'
+        elif {0, 2}.issubset(set(ds_index)):
+            comment = 'Intron retention'
+    elif ds_tuple[0][1] < threshold and ds_tuple[1][1] < threshold:
+        comment = 'No change'
+    return comment
+
+
 def spliceai_interpre(spliceai_res):
     spliceai_res_na = spliceai_res[(spliceai_res['SpliceAI Pred'] == '.') | (spliceai_res['SpliceAI Pred'].isna())].copy()
     spliceai_res_is = spliceai_res[(spliceai_res['SpliceAI Pred'] != '.') & (~spliceai_res['SpliceAI Pred'].isna())].copy()
@@ -72,7 +111,20 @@ def spliceai_interpre(spliceai_res):
     return spliceai_res_final
 
 
-def merge_spliceai_res(path, prefix, skip_rows, input_bed, anno):
+def spliceai_biology(spliceai_res, annotation):
+    spliceai_res_na = spliceai_res[(spliceai_res['SpliceAI Pred'] == '.') | (spliceai_res['SpliceAI Pred'].isna())].copy()
+    spliceai_res_is = spliceai_res[(spliceai_res['SpliceAI Pred'] != '.') & (~spliceai_res['SpliceAI Pred'].isna())].copy()
+    spliceai_res_na['SpliceAI Biology'] = '.'
+    if not spliceai_res_is.empty:
+        spliceai_res_is['SpliceAI Biology'] = spliceai_res_is['SpliceAI'].str.extract('SpliceAI=(.*?)$')
+        spliceai_res_is['SpliceAI Biology'] = spliceai_res_is['SpliceAI Biology'].str.split(',').str[0]
+        spliceai_res_is['SpliceAI Biology'] = spliceai_res_is['SpliceAI Biology'].str.split('|').str[0:10]
+        spliceai_res_is['SpliceAI Biology'] = spliceai_res_is.apply(lambda x: biology(x['SpliceAI Biology'], annotation), axis=1)
+    spliceai_res_final = spliceai_res_is.append(spliceai_res_na, sort=False)
+    return spliceai_res_final
+
+
+def merge_spliceai_res(path, prefix, skip_rows, input_bed, anno, annotation):
     cols = ['#CHROM', 'POS', 'REF', 'ALT', 'SpliceAI']
     spliceai_df = pd.read_csv(path + '/' + prefix + '.spliceai.vcf', sep='\t', skiprows=range(skip_rows))
     spliceai_df.rename(columns={'INFO': 'SpliceAI'}, inplace=True)
@@ -80,7 +132,8 @@ def merge_spliceai_res(path, prefix, skip_rows, input_bed, anno):
     spliceai_res.drop_duplicates(inplace=True)
     spliceai_res_pred = spliceai_max_score(spliceai_res)
     spliceai_res_pred_interpre = spliceai_interpre(spliceai_res_pred)
-    merge1 = pd.merge(input_bed, spliceai_res_pred_interpre, on=cols[:-1], how='left')
+    spliceai_res_pred_interpre_bio = spliceai_biology(spliceai_res_pred_interpre, annotation)
+    merge1 = pd.merge(input_bed, spliceai_res_pred_interpre_bio, on=cols[:-1], how='left')
     merge2 = pd.merge(anno, merge1, on=['#Chr', 'Start', 'Stop', 'Ref', 'Call'], how='left')
     merge2.drop(columns=['#CHROM', 'POS', 'REF', 'ALT'], inplace=True)
     return merge2
@@ -105,6 +158,7 @@ if __name__ == '__main__':
     out_format = opts.out_format
     in_format = opts.in_format
     config_dic = yaml_read(config)
+    annotation_df = pd.read_csv(config_dic['annotation'], sep='\t')
     if in_format != 'excel':
         anno_df = pd.read_csv(bgi_anno, sep='\t')
     else:
@@ -116,8 +170,9 @@ if __name__ == '__main__':
         splice_pred['SpliceAI'] = []
         splice_pred['SpliceAI Pred'] = []
         splice_pred['SpliceAI Interpretation'] = []
+        splice_pred['SpliceAI Biology'] = []
     else:
-        splice_pred = merge_spliceai_res(pwd, out, config_dic['skip_vcf_header_row'], all_bed, anno_df)
+        splice_pred = merge_spliceai_res(pwd, out, config_dic['skip_vcf_header_row'], all_bed, anno_df, annotation_df)
     if out_format == 'excel':
         splice_pred.to_excel(pwd + '/' + out + '.spliceai.xlsx', index=False)
     else:
