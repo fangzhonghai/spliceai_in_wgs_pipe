@@ -173,6 +173,7 @@ if __name__ == '__main__':
         splice_pred['SpliceAI Biology'] = []
     else:
         splice_pred = merge_spliceai_res(pwd, out, config_dic['skip_vcf_header_row'], all_bed, anno_df, annotation_df)
+        splice_pred['SpliceAI Pred'] = splice_pred['SpliceAI Pred'].apply(pd.to_numeric, errors='ignore')
     if out_format == 'excel':
         splice_pred.to_excel(pwd + '/' + out + '.spliceai.xlsx', index=False)
     else:
