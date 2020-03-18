@@ -91,7 +91,7 @@ def biology(spliceai_list, annotation):
         elif {1, 3}.issubset(set(ds_index)):
             comment = 'Exon skipped'
         elif {0, 2}.issubset(set(ds_index)):
-            comment = 'Intron retention'
+            comment = 'Intron retention. Insert {} nt.'.format(abs(dp[0]-dp[2]) + 1)
     elif ds_tuple[0][1] < threshold and ds_tuple[1][1] < threshold:
         comment = 'No change'
     return comment
