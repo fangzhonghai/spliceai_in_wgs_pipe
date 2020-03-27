@@ -174,6 +174,7 @@ if __name__ == '__main__':
     else:
         splice_pred = merge_spliceai_res(pwd, out, config_dic['skip_vcf_header_row'], all_bed, anno_df, annotation_df)
         splice_pred['SpliceAI Pred'] = splice_pred['SpliceAI Pred'].apply(pd.to_numeric, errors='ignore')
+        splice_pred.drop_duplicates(inplace=True)
     if out_format == 'excel':
         splice_pred.to_excel(pwd + '/' + out + '.spliceai.xlsx', index=False)
     else:
