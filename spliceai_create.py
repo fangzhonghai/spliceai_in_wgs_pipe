@@ -11,7 +11,6 @@ def print_usage(option, opt, value, parser):
     usage_message = """
 # --------------------------------------------------------------------------------------------------------------
 # --------------------------------------------------------------------------------------------------------------
-
 # --------------------------------------------------------------------------------------------------------------
 # --------------------------------------------------------------------------------------------------------------
     """
@@ -65,7 +64,7 @@ def bgi_anno_2_vcf_format(in_df, reference):
     df.loc[(df['Ref'].map(len) == 1) & (df['Call'].map(len) == 1) & (df['Ref'] != '.') & (df['Call'] != '.'), 'MuType'] = 'snp'
     df['POS'] = df['Stop']
     df.loc[df['MuType'] == 'del', 'POS'] = df.loc[df['MuType'] == 'del', 'Start']
-    df.loc[df['MuType'] == 'delins', 'POS'] = df.loc[df['MuType'] == 'delins', 'Start'] + 1
+    df.loc[df['MuType'] == 'delins', 'POS'] = df.loc[df['MuType'] == 'delins', 'Start']
     df['REF'] = df['Ref']
     df['ALT'] = df['Call']
     fa = pyfaidx.Fasta(reference)
@@ -78,6 +77,10 @@ def bgi_anno_2_vcf_format(in_df, reference):
             base = str(fa.get_seq(df.loc[i, '#CHROM'], df.loc[i, 'POS'], df.loc[i, 'POS'])).upper()
             df.loc[i, 'ALT'] = base
             df.loc[i, 'REF'] = base + df.loc[i, 'REF']
+        elif df.loc[i, 'MuType'] == 'delins':
+            base = str(fa.get_seq(df.loc[i, '#CHROM'], df.loc[i, 'POS'], df.loc[i, 'POS'])).upper()
+            df.loc[i, 'REF'] = base + df.loc[i, 'REF']
+            df.loc[i, 'ALT'] = base + df.loc[i, 'ALT']
         else:
             pass
     a = df[['#CHROM', 'POS', 'ID', 'REF', 'ALT', 'QUAL', 'FILTER', 'INFO']].copy()

@@ -1,0 +1,226 @@
+# -*- coding:utf-8 -*-
+import pandas as pd
+import optparse
+import yaml
+import sys
+import os
+
+
+def print_usage(option, opt, value, parser):
+    usage_message = """
+# --------------------------------------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------------------------------------
+
+# --------------------------------------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------------------------------------
+    """
+    print(usage_message)
+    sys.exit()
+
+
+def yaml_read(yaml_file):
+    with open(yaml_file, 'r') as y:
+        yaml_dic = yaml.load(y, Loader=yaml.FullLoader)
+    return yaml_dic
+
+
+def run_bedtools(bedtools, bed, outfile):
+    command = bedtools + ' sort -i ' + bed + '|' + bedtools + ' merge -i - >' + outfile
+    os.system(command)
+
+
+def run_tabix(tabix, bed, outfile, vcf):
+    command = tabix + ' -h -R ' + bed + ' ' + vcf + ' > ' + outfile
+    os.system(command)
+
+
+def spliceai_max_score(spliceai_res):
+    spliceai_res_na = spliceai_res[(spliceai_res['SpliceAI'] == '.') | (spliceai_res['SpliceAI'].isna())].copy()
+    spliceai_res_is = spliceai_res[(spliceai_res['SpliceAI'] != '.') & (~spliceai_res['SpliceAI'].isna())].copy()
+    spliceai_res_na['SpliceAI Pred'] = '.'
+    if not spliceai_res_is.empty:
+        spliceai_res_is['SpliceAI Pred'] = spliceai_res_is['SpliceAI'].str.extract('SpliceAI=(.*?)$')
+        spliceai_res_is['SpliceAI Pred'] = spliceai_res_is['SpliceAI Pred'].str.split(',').str[0]
+        spliceai_res_is['SpliceAI Pred'] = spliceai_res_is['SpliceAI Pred'].str.split('|').str[2:6]
+        spliceai_res_is['SpliceAI Pred'] = spliceai_res_is.apply(lambda x: max(x['SpliceAI Pred']), axis=1)
+    spliceai_res_final = spliceai_res_is.append(spliceai_res_na, sort=False)
+    return spliceai_res_final
+
+
+def interpretation(spliceai_list, chrom, pos):
+    threshold = 0.1
+    ds = spliceai_list[0:4]
+    dp = spliceai_list[4:8]
+    ds = [float(i) for i in ds]
+    dp = [int(i) for i in dp]
+    ds_dic = {0: 'acceptor gain', 1: 'acceptor loss', 2: 'donor gain', 3: 'donor loss'}
+    ds_index = [i for i, j in enumerate(ds) if j >= threshold]
+    if len(ds_index) > 0:
+        pred = []
+        for k in ds_index:
+            if dp[k] < 0:
+                comment = str(chrom) + ':' + str(pos + dp[k]) + ' (=' + str(pos) + str(dp[k]) + ') ' + ds_dic[k] + ' ' + str(ds[k])
+            else:
+                comment = str(chrom) + ':' + str(pos + dp[k]) + ' (=' + str(pos) + '+' + str(dp[k]) + ') ' + ds_dic[k] + ' ' + str(ds[k])
+            pred.append(comment)
+        pred_content = ';'.join(pred)
+        return pred_content
+    else:
+        return '.'
+
+
+def spliceai_interpre(spliceai_res):
+    spliceai_res_na = spliceai_res[(spliceai_res['SpliceAI Pred'] == '.') | (spliceai_res['SpliceAI Pred'].isna())].copy()
+    spliceai_res_is = spliceai_res[(spliceai_res['SpliceAI Pred'] != '.') & (~spliceai_res['SpliceAI Pred'].isna())].copy()
+    spliceai_res_na['SpliceAI Interpretation'] = '.'
+    if not spliceai_res_is.empty:
+        spliceai_res_is['SpliceAI Interpretation'] = spliceai_res_is['SpliceAI'].str.extract('SpliceAI=(.*?)$')
+        spliceai_res_is['SpliceAI Interpretation'] = spliceai_res_is['SpliceAI Interpretation'].str.split(',').str[0]
+        spliceai_res_is['SpliceAI Interpretation'] = spliceai_res_is['SpliceAI Interpretation'].str.split('|').str[2:10]
+        spliceai_res_is['SpliceAI Interpretation'] = spliceai_res_is.apply(lambda x: interpretation(x['SpliceAI Interpretation'],
+                                                                                                    x['#CHROM'], x['POS']), axis=1)
+    spliceai_res_final = spliceai_res_is.append(spliceai_res_na, sort=False)
+    return spliceai_res_final
+
+
+def judge(pred):
+    if pred != '.' and float(pred) >= 0.2:
+        return 'D'
+    elif pred != '.' and float(pred) < 0.2:
+        return 'P'
+    else:
+        return '.'
+
+
+def change_res(in_df):
+    in_df['SpliceAI Pred'] = in_df.apply(lambda x: judge(x['SpliceAI Pred']), axis=1)
+    return in_df
+
+
+def vcf_format_2_bgi_anno(in_df):
+    df = in_df.copy()
+    df['MuType'] = 'delins'
+    df.loc[(df['REF'].str.len() == 1) & (df['ALT'].str.len() == 1), 'MuType'] = 'snv'
+    df.loc[(df['REF'].str.len() == 1) & (df['ALT'].str.len() > 1), 'MuType'] = 'ins'
+    df.loc[(df['REF'].str.len() > 1) & (df['ALT'].str.len() == 1), 'MuType'] = 'del'
+    df['#Chr'] = df['#CHROM']
+    # df['#CHROM'] = df['#CHROM'].astype('str')
+    # if len(df[df['#CHROM'].str.startswith('chr')]):
+    #     df['#Chr'] = df['#CHROM']
+    # else:
+    #     df['#Chr'] = 'chr' + df['#CHROM']
+    # df.loc[df['#CHROM'] == 'chrM_NC_012920.1', '#Chr'] = 'chrMT'
+    df['Start'] = df['POS'].astype(int) - 1
+    df['Stop'] = df['POS'].astype(int)
+    df['Ref'] = df['REF']
+    df['Call'] = df['ALT']
+    df.loc[df['MuType'] == 'ins', 'Ref'] = '.'
+    df.loc[df['MuType'] == 'ins', 'Call'] = df.loc[df['MuType'] == 'ins', 'ALT'].str[1:]
+    df.loc[df['MuType'] == 'del', 'Call'] = '.'
+    df.loc[df['MuType'] == 'del', 'Ref'] = df.loc[df['MuType'] == 'del', 'REF'].str[1:]
+    df.loc[df['MuType'] == 'ins', 'Start'] = df.loc[df['MuType'] == 'ins', 'Stop']
+    df.loc[df['MuType'] == 'del', 'Start'] = df.loc[df['MuType'] == 'del', 'Stop']
+    df.loc[df['MuType'] == 'del', 'Stop'] = df.loc[df['MuType'] == 'del', 'Stop'] + df.loc[df['MuType'] == 'del', 'Ref'].str.len()
+    df.loc[df['MuType'] == 'delins', 'Stop'] = df.loc[df['MuType'] == 'delins', 'Start'] + df.loc[df['MuType'] == 'delins', 'Ref'].str.len()
+    df.loc[df['MuType'] == 'delins', 'Start'] = df.loc[df['MuType'] == 'delins', 'POS']
+    df.loc[df['MuType'] == 'delins', 'Ref'] = df.loc[df['MuType'] == 'delins', 'REF'].str[1:]
+    df.loc[df['MuType'] == 'delins', 'Call'] = df.loc[df['MuType'] == 'delins', 'ALT'].str[1:]
+    a = df[['#CHROM', 'POS', 'REF', 'ALT', '#Chr', 'Start', 'Stop', 'Ref', 'Call']].copy()
+    df.drop(columns=['MuType'], inplace=True)
+    return a, df
+
+
+def split_snv_indel(in_df):
+    df = in_df.copy()
+    df['MuType'] = 'indel'
+    df.loc[(df['Ref'].map(len) == 1) & (df['Call'].map(len) == 1) & (df['Ref'] != '.') & (df['Call'] != '.'), 'MuType'] = 'snv'
+    df_snv = df[df['MuType'] == 'snv']
+    df_indel = df[df['MuType'] == 'indel']
+    return df_snv[['#Chr', 'Start', 'Stop']], df_indel[['#Chr', 'Start', 'Stop']]
+
+
+Path = os.path.split(os.path.realpath(__file__))[0]
+
+if __name__ == '__main__':
+    parser = optparse.OptionParser()
+    parser.add_option('-u', '--usage', help='print more info on how to use this script', action="callback", callback=print_usage)
+    parser.add_option('-b', '--bgi_anno', dest='bgi_anno', default=None, metavar='file')
+    parser.add_option('-p', '--pwd', dest='pwd', default=Path, metavar='string')
+    parser.add_option('-o', '--out', dest='out', default=None, metavar='string')
+    parser.add_option('--skip_rows', dest='skip_rows', default=0, type=int)
+    parser.add_option('-c', '--config', dest='config', default=os.path.join(Path, 'etc', 'spliceai.yaml'), metavar='file')
+    (opts, args) = parser.parse_args()
+    bgi_anno = opts.bgi_anno
+    pwd = opts.pwd
+    out = opts.out
+    skip_rows = opts.skip_rows
+    config = opts.config
+    if not os.path.exists(config):
+        print(config + ' is not exist')
+        sys.exit(1)
+    config_dic = yaml_read(config)
+    spliceai_snv = config_dic['spliceai_snv']
+    if not os.path.exists(spliceai_snv):
+        spliceai_snv = os.path.join(pwd, config_dic['spliceai_snv'])
+        if not os.path.exists(spliceai_snv):
+            print(spliceai_snv + ' is not exist')
+            sys.exit(1)
+    spliceai_indel = config_dic['spliceai_indel']
+    if not os.path.exists(spliceai_indel):
+        spliceai_indel = os.path.join(pwd, config_dic['spliceai_indel'])
+        if not os.path.exists(spliceai_indel):
+            print(spliceai_indel + ' is not exist')
+            sys.exit(1)
+    wes_spliceai_gene = config_dic['wes_spliceai_gene']
+    if not os.path.exists(wes_spliceai_gene):
+        wes_spliceai_gene = os.path.join(pwd, config_dic['wes_spliceai_gene'])
+        if not os.path.exists(wes_spliceai_gene):
+            print(wes_spliceai_gene + ' is not exist')
+            sys.exit(1)
+    wes_spliceai_gene_df = pd.read_csv(wes_spliceai_gene, sep='\t')
+    bedtools = config_dic['bedtools']
+    if os.path.exists(os.path.join(pwd, bedtools)):
+        bedtools = os.path.join(pwd, bedtools)
+    tabix = config_dic['tabix']
+    if os.path.exists(os.path.join(pwd, tabix)):
+        tabix = os.path.join(pwd, tabix)
+    anno_df = pd.read_csv(bgi_anno, sep='\t', low_memory=False, dtype={'#Chr': str}, skiprows=range(skip_rows))
+    if anno_df.empty:
+        anno_df['SpliceAI'] = []
+        anno_df['SpliceAI Pred'] = []
+        anno_df['SpliceAI Interpretation'] = []
+        anno_df.to_csv(out + '.spliceai.tsv', sep='\t', index=False)
+        sys.exit(0)
+    if len(anno_df[anno_df['#Chr'].str.startswith('chr')]):
+        anno_df.replace({'#Chr': r'^chr'}, {'#Chr': ''}, inplace=True, regex=True)
+    df_bed_snv, df_bed_indel = split_snv_indel(anno_df)
+    df_bed_snv.to_csv(out + '.bgianno.snv.bed', sep='\t', index=False)
+    df_bed_indel.to_csv(out + '.bgianno.indel.bed', sep='\t', index=False)
+    splice_snv_all = pd.DataFrame(columns=['#CHROM', 'POS', 'REF', 'ALT', 'SpliceAI', '#Chr', 'Start', 'Stop', 'Ref', 'Call'])
+    splice_indel_all = pd.DataFrame(columns=['#CHROM', 'POS', 'REF', 'ALT', 'SpliceAI', '#Chr', 'Start', 'Stop', 'Ref', 'Call'])
+    if not df_bed_snv.empty:
+        run_bedtools(bedtools, out + '.bgianno.snv.bed', out + '.bgianno.snv.sort_merge.bed')
+        run_tabix(tabix, out + '.bgianno.snv.sort_merge.bed', out + '.spliceai.snv.vcf', spliceai_snv)
+        splice_snv = pd.read_csv(out + '.spliceai.snv.vcf', skiprows=range(28), sep='\t', dtype={'#CHROM': str})
+        splice_snv.rename(columns={'INFO': 'SpliceAI'}, inplace=True)
+        splice_snv.drop(columns=['ID', 'QUAL', 'FILTER'], inplace=True)
+        bed_snv, splice_snv_all = vcf_format_2_bgi_anno(splice_snv)
+    if not df_bed_indel.empty:
+        run_bedtools(bedtools, out + '.bgianno.indel.bed', out + '.bgianno.indel.sort_merge.bed')
+        run_tabix(tabix, out + '.bgianno.indel.sort_merge.bed', out + '.spliceai.indel.vcf', spliceai_indel)
+        splice_indel = pd.read_csv(out + '.spliceai.indel.vcf', skiprows=range(28), sep='\t', dtype={'#CHROM': str})
+        splice_indel.rename(columns={'INFO': 'SpliceAI'}, inplace=True)
+        splice_indel.drop(columns=['ID', 'QUAL', 'FILTER'], inplace=True)
+        bed_indel, splice_indel_all = vcf_format_2_bgi_anno(splice_indel)
+    splice_res = splice_snv_all.append(splice_indel_all, sort=False)
+    splice_res['SpliceAI Gene'] = splice_res['SpliceAI'].str.extract(r'\|(.*?)\|')
+    splice_res_gene = pd.merge(splice_res, wes_spliceai_gene_df, on=['SpliceAI Gene'])
+    splice_res_gene.drop(columns=['SpliceAI Gene'], inplace=True)
+    splice_res_max = spliceai_max_score(splice_res_gene)
+    splice_res_max_inter = spliceai_interpre(splice_res_max)
+    splice_res_max_inter_change = change_res(splice_res_max_inter)
+    splice_res_max_inter_change.drop(columns=['#CHROM', 'POS', 'REF', 'ALT'], inplace=True)
+    splice_res_merge = pd.merge(anno_df, splice_res_max_inter_change, on=['#Chr', 'Start', 'Stop', 'Ref', 'Call', 'Gene Symbol'], how='left')
+    splice_res_merge.drop_duplicates(inplace=True)
+    splice_res_merge.fillna(value={'SpliceAI': '.', 'SpliceAI Pred': '.', 'SpliceAI Interpretation': '.'}, inplace=True)
+    splice_res_merge.to_csv(out + '.spliceai.tsv', sep='\t', index=False)
