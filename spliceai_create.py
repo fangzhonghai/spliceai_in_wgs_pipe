@@ -61,7 +61,8 @@ def bgi_anno_2_vcf_format(in_df, reference):
     df['MuType'] = 'delins'
     df.loc[df['Ref'] == '.', 'MuType'] = 'ins'
     df.loc[df['Call'] == '.', 'MuType'] = 'del'
-    df.loc[(df['Ref'].map(len) == 1) & (df['Call'].map(len) == 1) & (df['Ref'] != '.') & (df['Call'] != '.'), 'MuType'] = 'snp'
+    df.loc[df['Ref'] == df['Call'], 'MuType'] = 'ref'
+    df.loc[(df['Ref'].map(len) == 1) & (df['Call'].map(len) == 1) & (df['Ref'] != '.') & (df['Call'] != '.') & (df['Ref'] != df['Call']), 'MuType'] = 'snp'
     df['POS'] = df['Stop']
     df.loc[df['MuType'] == 'del', 'POS'] = df.loc[df['MuType'] == 'del', 'Start']
     df.loc[df['MuType'] == 'delins', 'POS'] = df.loc[df['MuType'] == 'delins', 'Start']
