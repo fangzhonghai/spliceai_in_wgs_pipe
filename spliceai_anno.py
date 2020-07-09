@@ -99,10 +99,12 @@ def change_res(in_df):
 
 def vcf_format_2_bgi_anno(in_df):
     df = in_df.copy()
-    df['MuType'] = 'delins'
+    df['MuType'] = '.'
     df.loc[(df['REF'].str.len() == 1) & (df['ALT'].str.len() == 1), 'MuType'] = 'snv'
     df.loc[(df['REF'].str.len() == 1) & (df['ALT'].str.len() > 1), 'MuType'] = 'ins'
     df.loc[(df['REF'].str.len() > 1) & (df['ALT'].str.len() == 1), 'MuType'] = 'del'
+    df.loc[(df['REF'].str.len() > 1) & (df['ALT'].str.len() > 1) & (df['REF'].str[0] == df['ALT'].str[0]), 'MuType'] = 'delins_eq'
+    df.loc[(df['REF'].str.len() > 1) & (df['ALT'].str.len() > 1) & (df['REF'].str[0] != df['ALT'].str[0]), 'MuType'] = 'delins_neq'
     df['#Chr'] = df['#CHROM']
     # df['#CHROM'] = df['#CHROM'].astype('str')
     # if len(df[df['#CHROM'].str.startswith('chr')]):
@@ -121,10 +123,11 @@ def vcf_format_2_bgi_anno(in_df):
     df.loc[df['MuType'] == 'ins', 'Start'] = df.loc[df['MuType'] == 'ins', 'Stop']
     df.loc[df['MuType'] == 'del', 'Start'] = df.loc[df['MuType'] == 'del', 'Stop']
     df.loc[df['MuType'] == 'del', 'Stop'] = df.loc[df['MuType'] == 'del', 'Stop'] + df.loc[df['MuType'] == 'del', 'Ref'].str.len()
-    df.loc[df['MuType'] == 'delins', 'Stop'] = df.loc[df['MuType'] == 'delins', 'Start'] + df.loc[df['MuType'] == 'delins', 'Ref'].str.len()
-    df.loc[df['MuType'] == 'delins', 'Start'] = df.loc[df['MuType'] == 'delins', 'POS']
-    df.loc[df['MuType'] == 'delins', 'Ref'] = df.loc[df['MuType'] == 'delins', 'REF'].str[1:]
-    df.loc[df['MuType'] == 'delins', 'Call'] = df.loc[df['MuType'] == 'delins', 'ALT'].str[1:]
+    df.loc[df['MuType'] == 'delins_eq', 'Stop'] = df.loc[df['MuType'] == 'delins_eq', 'Start'] + df.loc[df['MuType'] == 'delins_eq', 'Ref'].str.len()
+    df.loc[df['MuType'] == 'delins_eq', 'Start'] = df.loc[df['MuType'] == 'delins_eq', 'POS']
+    df.loc[df['MuType'] == 'delins_eq', 'Ref'] = df.loc[df['MuType'] == 'delins_eq', 'REF'].str[1:]
+    df.loc[df['MuType'] == 'delins_eq', 'Call'] = df.loc[df['MuType'] == 'delins_eq', 'ALT'].str[1:]
+    df.loc[df['MuType'] == 'delins_neq', 'Stop'] = df.loc[df['MuType'] == 'delins_neq', 'Start'] + df.loc[df['MuType'] == 'delins_neq', 'Ref'].str.len()
     a = df[['#CHROM', 'POS', 'REF', 'ALT', '#Chr', 'Start', 'Stop', 'Ref', 'Call']].copy()
     df.drop(columns=['MuType'], inplace=True)
     return a, df
