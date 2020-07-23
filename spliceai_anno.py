@@ -1,5 +1,9 @@
 # -*- coding:utf-8 -*-
+from multiprocessing import Pool, cpu_count
+from functools import partial, reduce
+from io import StringIO
 import pandas as pd
+import subprocess
 import optparse
 import yaml
 import sys
@@ -10,7 +14,7 @@ def print_usage(option, opt, value, parser):
     usage_message = """
 # --------------------------------------------------------------------------------------------------------------
 # --------------------------------------------------------------------------------------------------------------
-
+  python3 spliceai_anno.py -i 20B2752186.out -o 20B2752186.out --process 4
 # --------------------------------------------------------------------------------------------------------------
 # --------------------------------------------------------------------------------------------------------------
     """
@@ -24,14 +28,20 @@ def yaml_read(yaml_file):
     return yaml_dic
 
 
-def run_bedtools(bedtools, bed, outfile):
-    command = bedtools + ' sort -i ' + bed + '|' + bedtools + ' merge -i - >' + outfile
-    os.system(command)
+def run_bedtools(bedtools, bed):
+    command = bedtools + ' sort -i ' + bed + '|' + bedtools + ' merge -i -'
+    output = subprocess.getoutput(command)
+    return StringIO(output)
 
 
-def run_tabix(tabix, bed, outfile, vcf):
-    command = tabix + ' -h -R ' + bed + ' ' + vcf + ' > ' + outfile
-    os.system(command)
+def run_tabix(tabix, vcf, bed):
+    command = tabix + ' -h -R ' + bed + ' ' + vcf
+    output = subprocess.getoutput(command)
+    splice = pd.read_csv(StringIO(output), skiprows=range(28), sep='\t', dtype={'#CHROM': str})
+    splice.rename(columns={'INFO': 'SpliceAI'}, inplace=True)
+    splice.drop(columns=['ID', 'QUAL', 'FILTER'], inplace=True)
+    splice_anno_format = vcf_format_2_bgi_anno(splice)
+    return splice_anno_format
 
 
 def spliceai_max_score(spliceai_res):
@@ -128,9 +138,9 @@ def vcf_format_2_bgi_anno(in_df):
     df.loc[df['MuType'] == 'delins_eq', 'Ref'] = df.loc[df['MuType'] == 'delins_eq', 'REF'].str[1:]
     df.loc[df['MuType'] == 'delins_eq', 'Call'] = df.loc[df['MuType'] == 'delins_eq', 'ALT'].str[1:]
     df.loc[df['MuType'] == 'delins_neq', 'Stop'] = df.loc[df['MuType'] == 'delins_neq', 'Start'] + df.loc[df['MuType'] == 'delins_neq', 'Ref'].str.len()
-    a = df[['#CHROM', 'POS', 'REF', 'ALT', '#Chr', 'Start', 'Stop', 'Ref', 'Call']].copy()
+    # a = df[['#CHROM', 'POS', 'REF', 'ALT', '#Chr', 'Start', 'Stop', 'Ref', 'Call']].copy()
     df.drop(columns=['MuType'], inplace=True)
-    return a, df
+    return df
 
 
 def split_snv_indel(in_df):
@@ -142,15 +152,31 @@ def split_snv_indel(in_df):
     return df_snv[['#Chr', 'Start', 'Stop']], df_indel[['#Chr', 'Start', 'Stop']]
 
 
+def split_df(df, split_num):
+    df.reset_index(drop=True, inplace=True)
+    df_list = list()
+    step = round(df.shape[0]/split_num)
+    for i in range(split_num):
+        if i == 0:
+            df_list.append(df.loc[0: step-1])
+        elif i == split_num-1:
+            df_list.append(df.loc[step*i:])
+        else:
+            df_list.append(df.loc[step*i:step*(i+1)-1])
+    return df_list
+
+
 Path = os.path.split(os.path.realpath(__file__))[0]
 
-if __name__ == '__main__':
+
+def main():
     parser = optparse.OptionParser()
     parser.add_option('-u', '--usage', help='print more info on how to use this script', action="callback", callback=print_usage)
     parser.add_option('-b', '--bgi_anno', dest='bgi_anno', default=None, metavar='file')
     parser.add_option('-p', '--pwd', dest='pwd', default=Path, metavar='string')
     parser.add_option('-o', '--out', dest='out', default=None, metavar='string')
     parser.add_option('--skip_rows', dest='skip_rows', default=0, type=int)
+    parser.add_option('--process', dest='process', default=cpu_count(), type=int)
     parser.add_option('-c', '--config', dest='config', default=os.path.join(Path, 'etc', 'spliceai.yaml'), metavar='file')
     (opts, args) = parser.parse_args()
     bgi_anno = opts.bgi_anno
@@ -158,6 +184,7 @@ if __name__ == '__main__':
     out = opts.out
     skip_rows = opts.skip_rows
     config = opts.config
+    process_num = min(opts.process, cpu_count())
     if not os.path.exists(config):
         print(config + ' is not exist')
         sys.exit(1)
@@ -202,19 +229,27 @@ if __name__ == '__main__':
     splice_snv_all = pd.DataFrame(columns=['#CHROM', 'POS', 'REF', 'ALT', 'SpliceAI', '#Chr', 'Start', 'Stop', 'Ref', 'Call'])
     splice_indel_all = pd.DataFrame(columns=['#CHROM', 'POS', 'REF', 'ALT', 'SpliceAI', '#Chr', 'Start', 'Stop', 'Ref', 'Call'])
     if not df_bed_snv.empty:
-        run_bedtools(bedtools, out + '.bgianno.snv.bed', out + '.bgianno.snv.sort_merge.bed')
-        run_tabix(tabix, out + '.bgianno.snv.sort_merge.bed', out + '.spliceai.snv.vcf', spliceai_snv)
-        splice_snv = pd.read_csv(out + '.spliceai.snv.vcf', skiprows=range(28), sep='\t', dtype={'#CHROM': str})
-        splice_snv.rename(columns={'INFO': 'SpliceAI'}, inplace=True)
-        splice_snv.drop(columns=['ID', 'QUAL', 'FILTER'], inplace=True)
-        bed_snv, splice_snv_all = vcf_format_2_bgi_anno(splice_snv)
+        bed_snv = pd.read_csv(run_bedtools(bedtools, out + '.bgianno.snv.bed'), sep='\t', header=None)
+        bed_snv_df_list = split_df(bed_snv, min(process_num, bed_snv.shape[0]))
+        bed_snv_df_list_files = list()
+        for i in range(len(bed_snv_df_list)):
+            bed_snv_df_list[i].to_csv(out + '.bgianno.snv.sort_merge.bed.' + str(i), sep='\t', index=False, header=None)
+            bed_snv_df_list_files.append(out + '.bgianno.snv.sort_merge.bed.' + str(i))
+        partial_run_snv = partial(run_tabix, tabix, spliceai_snv)
+        with Pool(process_num) as pool:
+            splice_snv_list = pool.map(partial_run_snv, bed_snv_df_list_files)
+        splice_snv_all = reduce(lambda x, y: x.append(y), splice_snv_list)
     if not df_bed_indel.empty:
-        run_bedtools(bedtools, out + '.bgianno.indel.bed', out + '.bgianno.indel.sort_merge.bed')
-        run_tabix(tabix, out + '.bgianno.indel.sort_merge.bed', out + '.spliceai.indel.vcf', spliceai_indel)
-        splice_indel = pd.read_csv(out + '.spliceai.indel.vcf', skiprows=range(28), sep='\t', dtype={'#CHROM': str})
-        splice_indel.rename(columns={'INFO': 'SpliceAI'}, inplace=True)
-        splice_indel.drop(columns=['ID', 'QUAL', 'FILTER'], inplace=True)
-        bed_indel, splice_indel_all = vcf_format_2_bgi_anno(splice_indel)
+        bed_indel = pd.read_csv(run_bedtools(bedtools, out + '.bgianno.indel.bed'), sep='\t', header=None)
+        bed_indel_df_list = split_df(bed_indel, min(process_num, bed_indel.shape[0]))
+        bed_indel_df_list_files = list()
+        for i in range(len(bed_indel_df_list)):
+            bed_indel_df_list[i].to_csv(out + '.bgianno.indel.sort_merge.bed.' + str(i), sep='\t', index=False, header=None)
+            bed_indel_df_list_files.append(out + '.bgianno.indel.sort_merge.bed.' + str(i))
+        partial_run_indel = partial(run_tabix, tabix, spliceai_indel)
+        with Pool(process_num) as pool:
+            splice_indel_list = pool.map(partial_run_indel, bed_indel_df_list_files)
+        splice_indel_all = reduce(lambda x, y: x.append(y), splice_indel_list)
     splice_res = splice_snv_all.append(splice_indel_all, sort=False)
     splice_res['SpliceAI Gene'] = splice_res['SpliceAI'].str.extract(r'\|(.*?)\|')
     splice_res_gene = pd.merge(splice_res, wes_spliceai_gene_df, on=['SpliceAI Gene'])
@@ -227,3 +262,7 @@ if __name__ == '__main__':
     splice_res_merge.drop_duplicates(inplace=True)
     splice_res_merge.fillna(value={'SpliceAI': '.', 'SpliceAI Pred': '.', 'SpliceAI Interpretation': '.'}, inplace=True)
     splice_res_merge.to_csv(out + '.spliceai.tsv', sep='\t', index=False)
+
+
+if __name__ == '__main__':
+    main()
