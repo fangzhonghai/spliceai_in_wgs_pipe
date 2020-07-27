@@ -36,7 +36,8 @@ def run_bedtools(bedtools, bed):
 
 def run_tabix(tabix, vcf, bed):
     command = tabix + ' -h -R ' + bed + ' ' + vcf
-    output = subprocess.getoutput(command)
+    # output = subprocess.getoutput(command)
+    output = os.popen(command).read()
     splice = pd.read_csv(StringIO(output), skiprows=range(28), sep='\t', dtype={'#CHROM': str})
     splice.rename(columns={'INFO': 'SpliceAI'}, inplace=True)
     splice.drop(columns=['ID', 'QUAL', 'FILTER'], inplace=True)
